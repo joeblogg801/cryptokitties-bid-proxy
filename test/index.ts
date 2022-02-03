@@ -341,14 +341,10 @@ describe("BidProxy", function () {
         );
         const pricePlusWei = price.add(1);
         const balanceBefore = await secondAccount.getBalance();
-        const tx = await bidProxy.bid(
-          testCase.kittyUnderTest,
-          testCase.cloneableWallet,
-          {
-            value: pricePlusWei,
-            // NO access list here
-          }
-        );
+        const tx = await bidProxy.bid(testCase.kittyUnderTest, {
+          value: pricePlusWei,
+          // NO access list here
+        });
         const receipt = await tx.wait();
         const gasPayment = tx.gasPrice?.mul(receipt.gasUsed).toBigInt();
         console.log("gas used in proxy buy", receipt.gasUsed.toNumber());
