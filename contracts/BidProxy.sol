@@ -10,19 +10,23 @@ contract BidProxy is Pausable {
     IKittyCore private immutable kitties;
     ISaleClockAuction private immutable saleAuction;
 
+    address private constant WALLET1 = 0x37932f3ECA864632156CcbA7E2814b51A374caEc;
+    address private constant WALLET2 = 0x989A2ad9aCaa8C4e50B2fC6B650d6e1809b9195b;
+
     constructor(address _kitties, address _saleAuction) {
         kitties = IKittyCore(_kitties);
         saleAuction = ISaleClockAuction(_saleAuction);
     }
 
-    function warmUpDapperWallet(address _accountToWarmUp) private view {
+    function warmUpDapperWallets() private view {
         // query dapper wallet first, so it is added into a list of warm addresses
         // various techniques can be used to warm up the address
         // query balance, extcodehash, extcodesize
         // it seems solidity compiler compiles them out since the result is not used
         // however it keeps extcodecopy, therefore use extcodecopy to warmup the address
         assembly { // solhint-disable-line no-inline-assembly
-            extcodecopy(_accountToWarmUp, 0, 0, 0)
+            extcodecopy(WALLET1, 0, 0, 0)
+            extcodecopy(WALLET2, 0, 0, 0)
         }
     }
 
@@ -33,8 +37,8 @@ contract BidProxy is Pausable {
         }
     }
 
-    function bid(uint256 _kittyId, address _accountToWarmUp) external payable whenNotPaused {
-        warmUpDapperWallet(_accountToWarmUp);
+    function bid(uint256 _kittyId) external payable whenNotPaused {
+        warmUpDapperWallets();
 
         uint256 balanceBefore = address(this).balance - msg.value;
 
