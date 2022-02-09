@@ -169,6 +169,39 @@ describe("BidProxy", function () {
     });
   });
 
+  describe("Fallback", function () {
+    it("should not fail if called without any data and value (noop)", async function () {
+      await firstAccount.sendTransaction({
+        to: bidProxyAddress,
+      });
+    });
+    it("should fail if called without any data but with a value (unless called from the sale auction)", async function () {
+      await expect(
+        firstAccount.sendTransaction({
+          to: bidProxyAddress,
+          value: 1,
+        })
+      ).to.be.rejectedWith(Error);
+    });
+    it("should fail if called with an unknown selector", async function () {
+      await expect(
+        firstAccount.sendTransaction({
+          to: bidProxyAddress,
+          data: "0x00000001",
+        })
+      ).to.be.rejectedWith(Error);
+    });
+    it("should fail if called with an unknown selector and value", async function () {
+      await expect(
+        firstAccount.sendTransaction({
+          to: bidProxyAddress,
+          data: "0x00000001",
+          value: 1,
+        })
+      ).to.be.rejectedWith(Error);
+    });
+  });
+
   describe("Rescue", function () {
     const kittyToRescue = testCases[0].kittyUnderTest;
     beforeEach(async function () {
@@ -238,10 +271,11 @@ describe("BidProxy", function () {
 
   describe("Bid", function () {
     for (const testCase of testCases) {
-      defineTests(testCase);
+      defineTests(testCase, true);
+      defineTests(testCase, false);
     }
 
-    function defineTests(testCase: TestCase) {
+    function defineTests(testCase: TestCase, useExactAmount: boolean) {
       async function checkPreconditions() {
         expect(await kittyCore.ownerOf(testCase.kittyUnderTest)).to.equal(
           SALE_AUCTION_ADDRESS
@@ -288,7 +322,7 @@ describe("BidProxy", function () {
           : [];
 
         const txPromise = saleAuction.bid(testCase.kittyUnderTest, {
-          value: pricePlusWei,
+          value: useExactAmount ? price : pricePlusWei,
           accessList,
         });
 
@@ -313,15 +347,23 @@ describe("BidProxy", function () {
         }
       }
 
-      it(`Should be able to buy a kitty ${testCase.kittyUnderTest} if access list is used`, async function () {
+      it(`Should be able to buy a kitty ${testCase.kittyUnderTest} ${
+        useExactAmount ? " with exact amount" : ""
+      } if access list is used`, async function () {
         await testDirectBuy({ useAccessList: true });
       });
 
-      it(`Should not be able to buy a kitty ${testCase.kittyUnderTest} without using access list`, async function () {
+      it(`Should not be able to buy a kitty ${testCase.kittyUnderTest} ${
+        useExactAmount ? " with exact amount" : ""
+      } without using access list`, async function () {
         await testDirectBuy({ useAccessList: false });
       });
 
-      it(`Should be able to buy a kitty ${testCase.kittyUnderTest} via proxy contract without using access list`, async function () {
+      it(`Should be able to buy a kitty ${
+        testCase.kittyUnderTest
+      } via proxy contract ${
+        useExactAmount ? " with exact amount" : ""
+      } without using access list`, async function () {
         await checkPreconditions();
 
         // all calls are made under second account which is not a owner
@@ -342,7 +384,7 @@ describe("BidProxy", function () {
         const pricePlusWei = price.add(1);
         const balanceBefore = await secondAccount.getBalance();
         const tx = await bidProxy.bid(testCase.kittyUnderTest, {
-          value: pricePlusWei,
+          value: useExactAmount ? price : pricePlusWei,
           // NO access list here
         });
         const receipt = await tx.wait();
@@ -357,6 +399,80 @@ describe("BidProxy", function () {
         // check that caller received their change back (1 wei) and only price + gasPayment was charged
         expect(balanceBefore.sub(price).sub(gasPayment!)).equal(balanceAfter);
       });
+
+      for (const { wallets, success } of [
+        { wallets: [testCase.cloneableWallet], success: true },
+        // eslint-disable-next-line prettier/prettier
+        { wallets: [testCase.cloneableWallet, ZERO_ADDRESS], success: true },
+        // eslint-disable-next-line prettier/prettier
+        { wallets: [testCase.cloneableWallet, ZERO_ADDRESS, testCase.cloneableWalletProxy], success: true },
+        // eslint-disable-next-line prettier/prettier
+        { wallets: [ZERO_ADDRESS, testCase.cloneableWalletProxy, testCase.cloneableWallet], success: true },
+        { wallets: [], success: false },
+        { wallets: [ZERO_ADDRESS], success: false },
+        // eslint-disable-next-line prettier/prettier
+        { wallets: [ZERO_ADDRESS, testCase.cloneableWalletProxy], success: false },
+      ]) {
+        it(`Should ${success ? "be" : "not be"} able to buy a kitty ${
+          testCase.kittyUnderTest
+        } via proxy contract ${
+          useExactAmount ? " with exact amount" : ""
+        } without using access list by warming up just [${wallets.join(
+          ", "
+        )}]`, async function () {
+          await checkPreconditions();
+
+          // all calls are made under second account which is not a owner
+          kittyCore = kittyCore.connect(secondAccount);
+          saleAuction = saleAuction.connect(secondAccount);
+          bidProxy = bidProxy.connect(secondAccount);
+          expect(await bidProxy.owner()).to.equal(firstAccount.address);
+          expect(firstAccount.address).to.not.equal(secondAccount.address);
+          expect(secondAccount.address).to.not.equal(SALE_AUCTION_ADDRESS);
+
+          expect(await kittyCore.ownerOf(testCase.kittyUnderTest)).to.equal(
+            SALE_AUCTION_ADDRESS
+          );
+
+          const price = await saleAuction.getCurrentPrice(
+            testCase.kittyUnderTest
+          );
+          const pricePlusWei = price.add(1);
+          const balanceBefore = await secondAccount.getBalance();
+          const txPromise = bidProxy.bidWithSpecificWarmups(
+            testCase.kittyUnderTest,
+            wallets,
+            {
+              value: useExactAmount ? price : pricePlusWei,
+              // NO access list here
+            }
+          );
+          if (success) {
+            const tx = await txPromise;
+            const receipt = await tx.wait();
+            const gasPayment = tx.gasPrice?.mul(receipt.gasUsed).toBigInt();
+            console.log(
+              "gas used in proxy buy with a specific warmup",
+              receipt.gasUsed.toNumber()
+            );
+
+            // check who the owner is
+            expect(await kittyCore.ownerOf(testCase.kittyUnderTest)).to.equal(
+              secondAccount.address
+            );
+            const balanceAfter = await secondAccount.getBalance();
+            // check that caller received their change back (1 wei) and only price + gasPayment was charged
+            expect(balanceBefore.sub(price).sub(gasPayment!)).equal(
+              balanceAfter
+            );
+          } else {
+            await expect(txPromise).to.be.rejectedWith(
+              Error,
+              "Transaction reverted without a reason string"
+            );
+          }
+        });
+      }
     }
   });
 });

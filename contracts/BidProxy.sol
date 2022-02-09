@@ -18,15 +18,14 @@ contract BidProxy is Pausable {
         saleAuction = ISaleClockAuction(_saleAuction);
     }
 
-    function warmUpDapperWallets() private view {
+    function _warmUpDapperWallet(address wallet) private view {
         // query dapper wallet first, so it is added into a list of warm addresses
         // various techniques can be used to warm up the address
         // query balance, extcodehash, extcodesize
         // it seems solidity compiler compiles them out since the result is not used
         // however it keeps extcodecopy, therefore use extcodecopy to warmup the address
         assembly { // solhint-disable-line no-inline-assembly
-            extcodecopy(WALLET1, 0, 0, 0)
-            extcodecopy(WALLET2, 0, 0, 0)
+            extcodecopy(wallet, 0, 0, 0)
         }
     }
 
@@ -37,9 +36,7 @@ contract BidProxy is Pausable {
         }
     }
 
-    function bid(uint256 _kittyId) external payable whenNotPaused {
-        warmUpDapperWallets();
-
+    function _bid(uint256 _kittyId) private {
         uint256 balanceBefore = address(this).balance - msg.value;
 
         // buy the kitty on behalf of the caller
@@ -57,6 +54,20 @@ contract BidProxy is Pausable {
         if (change > 0) {
             payable(msg.sender).transfer(change);
         }
+    }
+
+    function bid(uint256 _kittyId) external payable whenNotPaused {
+        _warmUpDapperWallet(WALLET1);
+        _warmUpDapperWallet(WALLET2);
+        _bid(_kittyId);
+    }
+
+    function bidWithSpecificWarmups(uint256 _kittyId, address[] calldata _accountsToWarmUp) external payable whenNotPaused {
+        uint256 len = _accountsToWarmUp.length;
+        for (uint256 i = 0; i < len; i += 1) {
+            _warmUpDapperWallet(_accountsToWarmUp[i]);
+        }
+        _bid(_kittyId);
     }
 
     /// @dev Transfers a kitty owned by this contract to the specified address.
